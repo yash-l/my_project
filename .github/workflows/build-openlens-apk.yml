@@ -1,0 +1,73 @@
+name: Build OpenLensVR Android APK
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  static-validation:
+    name: Validate source archive
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract original Unity project
+        run: unzip -q OpenLensVR-source.zip
+      - name: Run non-Unity source checks
+        run: |
+          cd OpenLensVR
+          python3 Tools/validate_project.py
+          python3 Tools/validate_hand_upgrade.py
+
+  build-android:
+    name: Build signed debug APK with Unity
+    needs: static-validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Extract Unity project
+        run: unzip -q OpenLensVR-source.zip
+      - name: Verify Unity activation is configured
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+        run: |
+          if [ -z "$UNITY_LICENSE" ]; then
+            echo "::error::UNITY_LICENSE is missing. Unity Personal requires a license file saved as a GitHub Actions secret."
+            echo "See https://game.ci/docs/github/activation/ (do not put license or password in repository files)."
+            exit 1
+          fi
+      - name: Fetch official MediaPipe hand model
+        run: python3 OpenLensVR/Tools/fetch_model.py
+      - name: Free runner disk space
+        run: |
+          sudo rm -rf /usr/local/lib/android/sdk/ndk || true
+          sudo rm -rf /usr/share/dotnet || true
+          df -h .
+      - name: Unity 6.3 Android build
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          projectPath: OpenLensVR
+          unityVersion: 6000.3.0f1
+          targetPlatform: Android
+          buildMethod: OpenLensVR.Editor.OpenLensBatchBuild.BuildAndroid
+          customParameters: -accept-apiupdate
+      - name: Verify output is an APK
+        run: |
+          test -s OpenLensVR/Builds/OpenLensVR-NordCE5-debug.apk
+          file OpenLensVR/Builds/OpenLensVR-NordCE5-debug.apk
+          sha256sum OpenLensVR/Builds/OpenLensVR-NordCE5-debug.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OpenLensVR-NordCE5-debug-apk
+          path: OpenLensVR/Builds/OpenLensVR-NordCE5-debug.apk
+          if-no-files-found: error
+          retention-days: 14
